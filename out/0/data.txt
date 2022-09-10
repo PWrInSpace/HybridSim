@@ -1,0 +1,51 @@
+### INPUT ### 
+
+VOL_TANK 0.0081 
+HEAD_SPACE 0.3 
+NUM_INJ1 13.54 
+DIA_INJ1 0.0025 
+DIA_PORT 0.0364 
+LENGTH_PORT 0.67 
+C_STAR_EFFICIENCY 0.94 
+NOZZLE_EFFICIENCY 0.97 
+NOZZLE_AREA_RATIO 4 
+DIA_FEED 0.01 
+LENGTH_FEED 2 
+KV_VALVE 5 
+DIA_VALVE 0.01 
+LENGTH_VALVE 0.05 
+DENSITY_FUEL 1208 
+REG_COEFF 6e-05 
+REG_EXP 0.5 
+PRES_EXTERNAL 101325 
+temp 289.15 
+
+
+### INPUT ### 
+
+Initial conditions:
+    time: 0.0000 s
+    tank temperature: 16.00 C
+    lmass: 4.6152 kg
+    vmass: 0.3366 kg
+    vap_pres 4609649.8794 Pa
+    fuel thickness: 0.0193 m
+    fuel mass 2.7334 kg
+
+starting vapour blowdown, vapour mass is 0.6816 kg
+injector pressure drop at liquid depletion was 10.4803%
+
+Final conditions:
+time:6.765999999999477
+tank temperature:-206.81113201123873
+lmass:0kg
+vmass:0.2613438755081193kg
+vap_pres:290074.83818315377Pa
+fuel thickness:0.019299999999999998m
+fuel mass1.8305046067393744kg
+
+Performance results:
+Initial thrust:3130.3942076880467N
+mean thrust:1718.1239170801564NN
+impulse:11621.390175130193Ns
+mean Isp:202.41886675622214
