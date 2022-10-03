@@ -1,7 +1,10 @@
 """Contains additional functions used by motor_sim.py
 Reference 1 - "Engineering Model to Calculate Mass Flow Rate of a Two-Phase
 Saturated Fluid Through An Injector Orifice", Brian J Solomon
-Zimmermann thesis (add link later)
+
+Original program corrected via equations found in
+Jonah E. Zimmerman "Self pressurizing tank dynamics" December 2015
+https://stacks.stanford.edu/file/druid:ds271zh2987/main_adob-augmented.pdf
 """
 
 ########################################
@@ -45,40 +48,38 @@ def area(d):
     return 0.25 * np.pi * d * d
 
 
-def dyer_injector(cpres, inj_dia, lden, inj_pdrop, hl, manifold_P, vpres, numinj):
+def dyer_injector(cpres, inj_dia, lden, inj_pdrop, hl, manifold_P, vpres, ls, numinj):
     """Models the mass flow rate of (initially liquid) n2o through a single
     injector orifice using the 2-phase model proposed by Dyer et al"""
     inj_pdrop_og = 0
 
     A=area(inj_dia)*numinj
-
+    Cd = 0.6  # Waxman et al, adapted for square edged orifices
+    # single-phase incompressible mass flow rate:
+    # See Ref 1, page 8, Eqn 2.13
+    mdot_spi = Cd * A * np.sqrt(2 * lden * inj_pdrop)
+    if cpres>vpres: #may occur in hgly pressurized tank
+        return mdot_spi
+    
     if inj_pdrop < 3e5:
         #print('accuracy warning: injector pdrop so low that'
         #      '2-phase Dyer model no longer applies. '
         #      'approximating with linear pdrop/mdot characteristic')
         inj_pdrop_og = inj_pdrop
         inj_pdrop = 3e5
-
+    
     # get downstream spec. enthalpy and density
-    h2, rho2 = chamber_vap(vpres, cpres)
-
-    # single-phase incompressible mass flow rate:
-    # See Ref 1, page 8, Eqn 2.13
-    Cd = 0.6  # Waxman et al, adapted for square edged orifices
-
-    mdot_spi = Cd * A * np.sqrt(2 * lden * inj_pdrop)
+    h2, rho2 = chamber_vap(ls, cpres)
 
     # mass flow rate by homogenous equilibrium model:
     # See Ref 1, page 9, Eqn 2.14
+    
     mdot_hem = Cd * A * rho2 * np.sqrt(2 * (hl - h2))
 
-    if vpres < cpres:
-        raise RuntimeError("injector pdrop lower than vapour pressure",
-                           "2-phase Dyer model no longer applies!")
     # non-equilibrium parameter k (∝ ratio of bubble growth
     #                              time and liquid residence time)
     # See Ref 1, page 9, Eqn 2.17
-    k = 1# np.sqrt((manifold_P - cpres) / (vpres - cpres))
+    k = np.sqrt((manifold_P - cpres) / (vpres - cpres))
 
     # mass flow rate by Dyer model
     # See Ref 1, page 11, Eqn 2.21
@@ -86,18 +87,29 @@ def dyer_injector(cpres, inj_dia, lden, inj_pdrop, hl, manifold_P, vpres, numinj
 
     if 0 < inj_pdrop_og < 3e5:
         mdot_ox *= inj_pdrop_og / (3e5)
-
-    return mdot_ox, mdot_spi, mdot_hem, h2
-
-def dyer_injector_vapour(vden):
     
-    mdot_ox=0
     return mdot_ox
+
+def dyer_injector_vapour(vden, inj_dia, numinj, vap_pres, pres_cham, vs, vh):
+    """model is up to verification"""
+    A=area(inj_dia)*numinj
+    Cd = 0.65  # somewhat a guess
+    mdot_spi = Cd * A * np.sqrt(2 * vden * (vap_pres-pres_cham))
+    """
+    Currently unsure of the model correctness, so basic equation is used
+    Additional research / test data required
+    """
+    #k=1
+    #h_cham, den_cham = chamber_vap(vs, pres_cham)
+    #mdot_hem = Cd * A * den_cham * np.sqrt(2 * (vh - h_cham))
+    #mdot_ox = ((k * mdot_spi) + mdot_hem) / (1 + k)
+    #return mdot_ox
+    return mdot_spi
 
 
 def _lookup_index(cpres, OF):
     if not 0 <= cpres <= 90e5:
-        raise RuntimeError('chamber pressure out of propep data range!')
+        raise RuntimeError('Chamber pressure out of propep data range!')
     if not 1/39 <= OF <= 39:
         raise RuntimeError('OF out of propep data range!')
 
@@ -112,31 +124,15 @@ def _lookup_index(cpres, OF):
 
 
 def c_star_lookup(cpres, OF, propep_data):
-    """Looks up ratio of characteristic velocity from chamber pressure and OF
-    ratio using propep data
-    """
+    """Looks up ratio of characteristic velocity from chamber pressure and OF ratio using propep data"""
     # note that propep data is in feet/s
     # we multiply by 0.3048 to convert from fps to m/s
     return float(propep_data[_lookup_index(cpres, OF)].split()[4]) * 0.3048
 
 
 def gamma_lookup(cpres, OF, propep_data):
-    """Looks up ratio of specific heats from chamber pressure and OF ratio
-    using propep data"""
+    """Looks up ratio of specific heats from chamber pressure and OF ratio using propep data"""
     return float(propep_data[_lookup_index(cpres, OF)].split()[1])
-
-
-def vapour_injector(inj_dia, vden, inj_pdrop):
-    """Models the mass flow rate of single phase vapour-only through a single
-    injector orifice"""
-    cd = 0.65  # somewhat a guess
-    return cd * area(inj_dia) * np.sqrt(2 * vden * inj_pdrop)
-
-
-def Z2_solve(temp, P):
-    """changed completly"""
-    Z=RP.REFPROPdll("NITROUS OXIDE","TP","Zvap",MASS_BASE_SI, 0,0,temp, P, [1.0]).Output[0]
-    return Z
 
 
 def ball_valve_K(Re, d1, d2, L):
@@ -154,73 +150,70 @@ def ball_valve_K(Re, d1, d2, L):
 
 
 def Nikuradse(Re):
-    """Returns the friction factor, f, for a given Reynolds number, fitting the
-    Nikuradse model"""
+    """Returns the friction factor, f, for a given Reynolds number, fitting the Nikuradse model"""
     return 0.0076 * pow(3170/Re, 0.165) / (1 + pow(3170/Re, 7)) + 16/Re
 
 
 def thermophys(temp):
-    """Get N2O data at a given temperature.
-    Uses polynomials from ESDU sheet 91022. All units SI.
-
-    Returns:
-        - N2O liquid density
-        - vapour density
-        - latent heat of vaporization
-        - dynamic viscosity
-        - vapour pressure for input temperature.
-
-
-        Changed to REFPROP to get consistent data with density end enthalpy of downstream conditions
+    """
+        Get N2O data at a given temperature.
+        Changed to REFPROP
         Saturation properties are considered
     """
-    properties=RP.REFPROPdll("NITROUS OXIDE","TSAT","Dliq;Dvap;Hliq;Hvap;CV;P;VIS;Zvap;Eliq;Evap",MASS_BASE_SI, 0,0,temp, 0, [1.0])
 
-    lden = properties.Output[0]
+    properties=RP.REFPROPdll("NITROUS OXIDE","TSAT","P;Dliq;Dvap;Hliq;VIS;Sliq",MASS_BASE_SI, 0,0,temp, 0, [1.0])
 
-    vden = properties.Output[1]
+    pres=properties.Output[0]
+    lden = properties.Output[1] 
+    vden = properties.Output[2]
+    lh = properties.Output[3]
+    ldynvis = properties.Output[4]
+    ls = properties.Output[5]
+    
+    return lden, vden, lh, pres, ldynvis, ls
 
-    hl = properties.Output[2]
-
-    hg = properties.Output[3]
-
-    c = properties.Output[4]
-
-    vpres = properties.Output[5]
-
-    ldynvis = properties.Output[6]
-
-    Z = properties.Output[7]
-
-    lu = properties.Output[8]
-
-    vu = properties.Output[9]
-
-    return (lden, vden, hl, hg, c, vpres, ldynvis, Z, lu, vu)
+def initial_U(temp, lmass, vmass):
+    #calculate initial eternal energy based on temperature and mass composition
+    properties=RP.REFPROPdll("NITROUS OXIDE","TSAT","Eliq;Evap",MASS_BASE_SI, 0,0,temp, 0, [1.0])
+    lu = properties.Output[0]
+    vu = properties.Output[1]
+    U=lu*lmass+vu*vmass
+    return U
 
 def thermophys_vapour(vden):
     """Returns N2O vapour properties based on assumption that vapour leftover in tank
     stays saturated, otherwise during decompression it would condense"""
-    properties=RP.REFPROPdll("NITROUS OXIDE","DQ","PT",MASS_BASE_SI, 0,0,vden, 1, [1.0])
+    properties=RP.REFPROPdll("NITROUS OXIDE","DQ","P;T;S;H;E",MASS_BASE_SI, 0,0,vden, 1, [1.0])
     vap_pres=properties.Output[0]
     temp=properties.Output[1]
-    return vap_pres, temp
+    vs=properties.Output[2]
+    vh=properties.Output[3]
+    vu=properties.Output[4]
+    return vap_pres, temp, vs, vh, vu
 
-def chamber_vap(p1, p2):
-    """Returns N2O specific enthalpy of vapour and vapour density at chambe
+def thermophys_vent(temp):
+    properties=RP.REFPROPdll("NITROUS OXIDE","TSAT","Dvap;Hvap;Svap;Eliq;Evap;Dliq",MASS_BASE_SI, 0,0,temp, 0, [1.0])
+    vden=properties.Output[0]
+    vh=properties.Output[1]
+    vs=properties.Output[2]
+    lu=properties.Output[3]
+    vu=properties.Output[4]
+    lden=properties.Output[5]
+    return vden, vh, vs, lu, vu, lden
+
+def chamber_vap(s, cham_pres):
+    """Returns N2O specific enthalpy of vapour and vapour density at chamber
     pressure, again, 2nd argument is guess of vapour temperature
 
-    Changed to refprop, now calculates properties of mixtrure when given isentropic flow to the chamber
-    In future can be integrated into thermophys"""
-    s=RP.REFPROPdll("NITROUS OXIDE","PSAT","Sliq",MASS_BASE_SI, 0,0,p1, 0, [1.0]).Output[0]
-    properties=RP.REFPROPdll("NITROUS OXIDE","PS","H;D",MASS_BASE_SI, 0,0,p2, s, [1.0])
-    hg = properties.Output[0]
-    vden = properties.Output[1]
-    return (hg, vden)
+    Changed to refprop, now calculates properties of mixtrure when given isentropic flow to the chamber"""
+    properties=RP.REFPROPdll("NITROUS OXIDE","PS","H;D",MASS_BASE_SI, 0,0,cham_pres, s, [1.0])
+    h = properties.Output[0]
+    den = properties.Output[1]
+    return (h, den)
 
-def mach_exit(gamma, NOZZLE_AREA_RATIO):
+def nozzle(gamma, eps, throatA, pres_cham, eff, pres_ext):
+    
     """Returns the exit mach number by numerical solution"""
-
     def mach_error(m):
         """Finds the discrepancy between the non-dimensional mass flow
         rate (stagnation) found using Mach number relations and that
@@ -228,22 +221,114 @@ def mach_exit(gamma, NOZZLE_AREA_RATIO):
         m_new = np.power(
             2 / (gamma + 1) * (1 + (gamma - 1) * m * m / 2),
             (gamma + 1) / (gamma - 1) / 2
-        ) / NOZZLE_AREA_RATIO
+        ) / eps
         return abs(m - m_new)
-
-    return float(
-            scipy.optimize.minimize(mach_error, 2.5, tol=1e-9, method='Powell').x)
-
-def EQTemp (Utot, mtot, Vdesired):
-    def EQVolumeDifference (Tinit, Utot, mtot, Vdesired):
-        properties=RP.REFPROPdll("NITROUS OXIDE","TSAT","Evap;Eliq;Dvap;Dliq",MASS_BASE_SI, 0,0,Tinit, 0, [1.0])
-        uvap=properties.Output[0]
-        uliq=properties.Output[1]
-        rhovap=properties.Output[2]
-        rholiq=properties.Output[3]
-        x=(Utot/mtot-uliq)/(uvap-uliq)
-        Vtank=mtot*((1-x)/rholiq+x/rhovap)
-        return Vtank-Vdesired
-    Temp=optimize.bisect(EQVolumeDifference, 240, 309.5, xtol=0.01, args=tuple([Utot, mtot, Vdesired]))
+    mach_exit = float(
+            scipy.optimize.minimize(mach_error, 2.5, tol=1e-4, method='Powell').x)
     
-    return Temp
+    pres_exit = pres_cham * pow(1 + (gamma - 1) * mach_exit * mach_exit * 0.5, -gamma / (gamma - 1))
+    thrust = eff * (
+        throatA * pres_cham * np.sqrt(
+            2 * gamma**2 / (gamma - 1)
+            * pow(2 / (gamma + 1), (gamma + 1) / (gamma - 1))
+            * (1 - pow(pres_exit / pres_cham, 1 - 1 / gamma))
+        ) + (pres_exit - pres_ext) * throatA * eps)
+    
+    return mach_exit, pres_exit, thrust
+
+def thermophys_liquid(U, m, V):
+    u=U/m
+    den=m/V
+    properties=RP.REFPROPdll("NITROUS OXIDE","DE","T;Dliq;Hliq;P;VISliq;Sliq;QMASS",MASS_BASE_SI, 0,0,den, u, [1.0])
+    temp=properties.Output[0]
+    lden=properties.Output[1]
+    lh=properties.Output[2]
+    vap_pres=properties.Output[3]
+    ldynvis=properties.Output[4]
+    ls=properties.Output[5]
+    q=properties.Output[6]
+    vmass=m*q
+    lmass=m*(1-q)
+    return temp, lden, lh, vap_pres, ldynvis, ls, lmass, vmass
+
+#########################################################################
+#           Additional functions for tanking simulation                 #
+#########################################################################
+
+def pressure_to_temp(p):
+    return RP.REFPROPdll("NITROUS OXIDE","PSAT","T",MASS_BASE_SI, 0,0,p, 0, [1.0]).Output[0]
+
+def mass_to_headspace(temp, V, m):
+    den=m/V
+    properties=RP.REFPROPdll("NITROUS OXIDE","DT","QMASS;Dvap",MASS_BASE_SI, 0,0,den, temp, [1.0])
+    q=properties.Output[0]
+    vden=properties.Output[1]
+    headspace = q*den/vden
+    return headspace
+
+def dyer_injector_tanking(p_tank, p_main, inj_dia, lden_main, h_main, s_main):
+    
+    #decide which values generate here and which use as input
+    properties=RP.REFPROPdll("NITROUS OXIDE","PS","D;H;Q",MASS_BASE_SI, 0,0,p_tank,s_main, [1.0])
+    den_tank=properties.Output[0]
+    h_tank=properties.Output[1]
+    q=properties.Output[2]
+    
+    inj_pdrop=(p_main-p_tank)
+    inj_pdrop_og = 0
+
+    A=area(inj_dia)
+    Cd = 0.6
+    k=1
+    
+    if inj_pdrop < 3e5:
+        inj_pdrop_og = inj_pdrop
+        inj_pdrop = 3e5
+       
+    mdot_spi = Cd * A * np.sqrt(2 * lden_main * inj_pdrop)
+    mdot_hem = Cd * A * den_tank * np.sqrt(2 * (h_main - h_tank))
+    mdot_ox = ((k * mdot_spi) + mdot_hem) / (1 + k)
+
+    if 0 < inj_pdrop_og < 3e5:
+        mdot_ox *= inj_pdrop_og / (3e5)
+    
+    return mdot_ox, q
+
+def EQvent(den, u):
+    properties=RP.REFPROPdll("NITROUS OXIDE","DE","QMASS;P;T;Hliq;Hvap",MASS_BASE_SI, 0,0,den,u, [1.0])
+    q=properties.Output[0]
+    p=properties.Output[1]
+    T=properties.Output[2]
+    lh=properties.Output[3]
+    vh=properties.Output[4]
+    return q, p, T, lh, vh
+
+
+def initial_thermophys(V, headspace, m, temp, pres):
+    if pres:
+        properties=RP.REFPROPdll("NITROUS OXIDE","PSAT","T;Dliq;Dvap;Eliq;Evap",MASS_BASE_SI, 0,0,pres,0, [1.0])
+        p=pres
+        T=properties.Output[0]
+    if temp:
+        properties=RP.REFPROPdll("NITROUS OXIDE","TSAT","P;Dliq;Dvap;Eliq;Evap",MASS_BASE_SI, 0,0,temp,0, [1.0])
+        T=temp
+        p=properties.Output[0]
+        
+    lden=properties.Output[1]
+    vden=properties.Output[2]
+    if m:
+        q=vden*V/m
+        lmass=m*(1-q)
+        vmass=m*q
+        tmass=m
+    if headspace:
+        lmass = V * (1 - headspace) * lden
+        vmass = V * headspace * vden
+        q=vmass/(lmass+vmass)
+        tmass=lmass+vmass
+    lu = properties.Output[3]
+    vu = properties.Output[4]
+    U=lu*lmass+vu*vmass
+    
+    return p, T, lden, vden, lmass, vmass, U
+        
